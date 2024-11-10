@@ -26,6 +26,7 @@ export enum SchedulerJobFlags {
 
 export interface SchedulerJob extends Function {
   id?: number
+  position?: number
   /**
    * flags can technically be undefined, but it can still be used in bitwise
    * operations just like 0.
@@ -42,6 +43,7 @@ export type SchedulerJobs = SchedulerJob | SchedulerJob[]
 
 let isFlushing = false
 let isFlushPending = false
+let auto = true
 
 const queue: SchedulerJob[] = []
 let flushIndex = 0
@@ -51,7 +53,7 @@ let activePostFlushCbs: SchedulerJob[] | null = null
 let postFlushIndex = 0
 
 const resolvedPromise = /*@__PURE__*/ Promise.resolve() as Promise<any>
-let currentFlushPromise: Promise<void> | null = null
+let currentFlushPromise: Promise<void[]> | null = null
 
 const RECURSION_LIMIT = 100
 type CountMap = Map<SchedulerJob, number>
@@ -94,7 +96,8 @@ function findInsertionIndex(id: number) {
   return start
 }
 
-export function queueJob(job: SchedulerJob): void {
+export function queueJob(job: SchedulerJob): number {
+  let index = -1
   if (!(job.flags! & SchedulerJobFlags.QUEUED)) {
     const jobId = getId(job)
     const lastJob = queue[queue.length - 1]
@@ -103,29 +106,120 @@ export function queueJob(job: SchedulerJob): void {
       // fast path when the job id is larger than the tail
       (!(job.flags! & SchedulerJobFlags.PRE) && jobId >= getId(lastJob))
     ) {
+      index = queue.length
       queue.push(job)
     } else {
-      queue.splice(findInsertionIndex(jobId), 0, job)
+      index = findInsertionIndex(jobId)
+      queue.splice(index, 0, job)
     }
 
     job.flags! |= SchedulerJobFlags.QUEUED
 
     queueFlush()
   }
+  return index
+}
+
+export function toggleMode(): void {
+  auto = !auto
+}
+
+let controllers = 0
+
+export function getMode(): 'auto' | 'manual' {
+  return auto ? 'auto' : 'manual'
+}
+
+export function switchToAuto(): void {
+  controllers = Math.max(controllers - 1, 0)
+  if (controllers > 0) {
+    return
+  }
+
+  if (queue.length || pendingPostFlushCbs.length) {
+    try {
+      flushPreFlushCbs()
+    } finally {
+      // If there was an error we still need to clear the QUEUED flags
+      for (; flushIndex < queue.length; flushIndex++) {
+        const job = queue[flushIndex]
+        if (job) {
+          job.flags! &= ~SchedulerJobFlags.QUEUED
+        }
+      }
+
+      flushIndex = 0
+      queue.length = 0
+
+      flushPostFlushCbs(seen)
+
+      endFlush()
+      isFlushing = false
+      currentFlushPromise = null
+      // some postFlushCb queued jobs!
+      // keep flushing until it drains.
+      if (queue.length || pendingPostFlushCbs.length) {
+        flushJobs(seen)
+      }
+      auto = true
+    }
+  } else {
+    flushIndex = 0
+    endFlush()
+    isFlushing = false
+    currentFlushPromise = null
+    activePostFlushCbs = null
+    postFlushIndex = 0
+    auto = true
+  }
+}
+
+export function switchToManual(): void {
+  controllers++
+  auto = false
+}
+
+let endFlushImpl = NOOP
+function trackManualFlush() {
+  return new Promise<void>(resolve => {
+    endFlushImpl = () => {
+      resolve()
+      auto = true
+      endFlushImpl = NOOP
+    }
+  })
+}
+
+export function endFlush(): void {
+  endFlushImpl()
 }
 
 function queueFlush() {
   if (!isFlushing && !isFlushPending) {
     isFlushPending = true
-    currentFlushPromise = resolvedPromise.then(flushJobs)
+    currentFlushPromise = Promise.all([
+      resolvedPromise.then(flushJobs),
+      trackManualFlush(),
+    ])
   }
 }
 
-export function queuePostFlushCb(cb: SchedulerJobs): void {
+export function queuePostFlushCb(cb: SchedulerJobs): {
+  offset: number
+  length: number
+} {
+  const indexes = {
+    offset: 0,
+    length: 0,
+  }
   if (!isArray(cb)) {
     if (activePostFlushCbs && cb.id === -1) {
+      indexes.offset = postFlushIndex
+      indexes.length = 1
       activePostFlushCbs.splice(postFlushIndex + 1, 0, cb)
     } else if (!(cb.flags! & SchedulerJobFlags.QUEUED)) {
+      indexes.offset = pendingPostFlushCbs.length
+      indexes.length = 1
       pendingPostFlushCbs.push(cb)
       cb.flags! |= SchedulerJobFlags.QUEUED
     }
@@ -133,9 +227,12 @@ export function queuePostFlushCb(cb: SchedulerJobs): void {
     // if cb is an array, it is a component lifecycle hook which can only be
     // triggered by a job, which is already deduped in the main queue, so
     // we can skip duplicate check here to improve perf
+    indexes.offset = pendingPostFlushCbs.length
+    indexes.length = cb.length
     pendingPostFlushCbs.push(...cb)
   }
   queueFlush()
+  return indexes
 }
 
 export function flushPreFlushCbs(
@@ -208,9 +305,83 @@ export function flushPostFlushCbs(seen?: CountMap): void {
 const getId = (job: SchedulerJob): number =>
   job.id == null ? (job.flags! & SchedulerJobFlags.PRE ? -1 : Infinity) : job.id
 
+export function getJobAt(index: number): SchedulerJob | undefined {
+  return queue[index]
+}
+
+let seen: CountMap
+if (__DEV__) {
+  seen = new Map()
+}
+
+const check = __DEV__
+  ? (job: SchedulerJob) => checkRecursiveUpdates(seen!, job)
+  : NOOP
+
+export function flushJobsUntil(index: number): void {
+  try {
+    for (; flushIndex <= index; flushIndex++) {
+      const job = queue[flushIndex]
+      if (job && !(job.flags! & SchedulerJobFlags.DISPOSED)) {
+        if (__DEV__ && check(job)) {
+          return
+        }
+        if (job.flags! & SchedulerJobFlags.ALLOW_RECURSE) {
+          job.flags! &= ~SchedulerJobFlags.QUEUED
+        }
+        callWithErrorHandling(
+          job,
+          job.i,
+          job.i ? ErrorCodes.COMPONENT_UPDATE : ErrorCodes.SCHEDULER,
+        )
+        job.flags! &= ~SchedulerJobFlags.QUEUED
+      }
+    }
+  } catch {}
+}
+
+function getActivePostFlushCbs() {
+  const deduped = [...new Set(pendingPostFlushCbs)].sort(
+    (a, b) => getId(a) - getId(b),
+  )
+  pendingPostFlushCbs.length = 0
+
+  // #1947 already has active queue, nested flushPostFlushCbs call
+  if (activePostFlushCbs) {
+    activePostFlushCbs.push(...deduped)
+    return activePostFlushCbs
+  }
+
+  activePostFlushCbs = deduped
+  return activePostFlushCbs
+}
+export function flushPostJobsUntil(index: number, clear: boolean = true): void {
+  activePostFlushCbs = getActivePostFlushCbs()
+  if (__DEV__) {
+    seen = seen || new Map()
+  }
+
+  for (
+    ;
+    postFlushIndex <= index && postFlushIndex < activePostFlushCbs.length;
+    postFlushIndex++
+  ) {
+    const cb = activePostFlushCbs[postFlushIndex]
+    if (__DEV__ && checkRecursiveUpdates(seen!, cb)) {
+      continue
+    }
+    if (cb.flags! & SchedulerJobFlags.ALLOW_RECURSE) {
+      cb.flags! &= ~SchedulerJobFlags.QUEUED
+    }
+    if (!(cb.flags! & SchedulerJobFlags.DISPOSED)) cb()
+    cb.flags! &= ~SchedulerJobFlags.QUEUED
+  }
+}
+
 function flushJobs(seen?: CountMap) {
   isFlushPending = false
   isFlushing = true
+  if (!auto) return
   if (__DEV__) {
     seen = seen || new Map()
   }
@@ -256,6 +427,7 @@ function flushJobs(seen?: CountMap) {
 
     flushPostFlushCbs(seen)
 
+    endFlush()
     isFlushing = false
     currentFlushPromise = null
     // some postFlushCb queued jobs!
