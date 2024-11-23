@@ -1,5 +1,4 @@
 // enums are compiled away via custom transform so no real dependency here
-import { ReactiveFlags } from '@vue/reactivity'
 import {
   isArray,
   isFunction,
@@ -11,6 +10,15 @@ import {
   isSymbol,
   objectToString,
 } from './general'
+
+enum ReactiveFlags {
+  SKIP = '__v_skip',
+  IS_REACTIVE = '__v_isReactive',
+  IS_READONLY = '__v_isReadonly',
+  IS_SHALLOW = '__v_isShallow',
+  RAW = '__v_raw',
+  IS_REF = '__v_isRef',
+}
 
 // can't use isRef here since @vue/shared has no deps
 const isRef = (val: any): val is { value: unknown } => {
