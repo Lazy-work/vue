@@ -595,6 +595,8 @@ export interface ComponentInternalInstance {
    * @internal
    */
   resolvedOptions?: MergedComponentOptions
+  queueEffect?: (flush: string, index: number) => void
+  getEffectPosition?: () => number
 }
 
 const emptyAppContext = createAppContext()
