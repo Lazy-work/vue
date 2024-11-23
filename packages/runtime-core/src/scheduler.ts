@@ -176,6 +176,7 @@ export function switchToAuto(): void {
 
 export function switchToManual(): void {
   controllers++
+  queueFlush()
   auto = false
 }
 
