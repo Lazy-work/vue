@@ -1,4 +1,3 @@
-import type { SchedulerJob } from 'packages/runtime-core/src/scheduler'
 import {
   EffectScope,
   type Ref,
@@ -10,7 +9,7 @@ import {
   watch,
 } from '../src'
 
-const queue: SchedulerJob[] = []
+const queue: (() => void)[] = []
 
 // a simple scheduler for testing purposes
 let isFlushPending = false

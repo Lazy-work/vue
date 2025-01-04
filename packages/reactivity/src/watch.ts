@@ -24,8 +24,6 @@ import {
 import { isReactive, isShallow } from './reactive'
 import { type Ref, isRef } from './ref'
 import { getCurrentScope } from './effectScope'
-import { getCurrentInstance } from '@vue/runtime-core'
-import type { SchedulerJob } from 'packages/runtime-core/src/scheduler'
 
 // These errors were transferred from `packages/runtime-core/src/errorHandling.ts`
 // to @vue/reactivity to allow co-location with the moved base watch logic, hence
@@ -79,7 +77,7 @@ export interface WatchHandle extends WatchStopHandle {
 // initial value for watchers to trigger on undefined initial values
 const INITIAL_WATCHER_VALUE = {}
 
-export type WatchScheduler = (job: SchedulerJob, isFirstRun: boolean) => void
+export type WatchScheduler = (job: () => void, isFirstRun: boolean) => void
 
 const cleanupMap: WeakMap<ReactiveEffect, (() => void)[]> = new WeakMap()
 let activeWatcher: ReactiveEffect | undefined = undefined
@@ -295,15 +293,9 @@ export function watch(
 
   effect = new ReactiveEffect(getter)
 
-  const instance = getCurrentInstance()
   effect.scheduler = scheduler
     ? () => scheduler(job, false)
     : (job as EffectScheduler)
-
-  if (instance) {
-    job.i = instance
-    job.position = instance.getEffectPosition!()
-  }
 
   boundCleanup = fn => onWatcherCleanup(fn, false, effect)
 
