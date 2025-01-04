@@ -8,12 +8,7 @@ import {
   type WatchSource,
   watch as baseWatch,
 } from '@vue/reactivity'
-import {
-  type SchedulerJob,
-  SchedulerJobFlags,
-  queueJob,
-  queuePostFlushCb,
-} from './scheduler'
+import { type SchedulerJob, SchedulerJobFlags, queueJob } from './scheduler'
 import { EMPTY_OBJ, NOOP, extend, isFunction, isString } from '@vue/shared'
 import {
   type ComponentInternalInstance,
@@ -22,7 +17,7 @@ import {
   setCurrentInstance,
 } from './component'
 import { callWithAsyncErrorHandling } from './errorHandling'
-// import { queuePostRenderEffect } from './renderer'
+import { queuePostRenderEffect } from './renderer'
 import { warn } from './warning'
 import type { ObjectWatchOptionItem } from './componentOptions'
 import { useSSRContext } from './helpers/useSsrContext'
@@ -47,7 +42,7 @@ type MapSources<T, Immediate> = {
 }
 
 export interface WatchEffectOptions extends DebuggerOptions {
-  flush?: 'pre' | 'post' | 'sync' | 'insertion' | 'layout'
+  flush?: 'pre' | 'post' | 'sync'
 }
 
 export interface WatchOptions<Immediate = boolean> extends WatchEffectOptions {
@@ -83,32 +78,6 @@ export function watchSyncEffect(
     effect,
     null,
     __DEV__ ? extend({}, options as any, { flush: 'sync' }) : { flush: 'sync' },
-  )
-}
-
-export function watchInsertionEffect(
-  effect: WatchEffect,
-  options?: DebuggerOptions,
-): WatchHandle {
-  return doWatch(
-    effect,
-    null,
-    __DEV__
-      ? extend({}, options as any, { flush: 'insertion' })
-      : { flush: 'insertion' },
-  )
-}
-
-export function watchLayoutEffect(
-  effect: WatchEffect,
-  options?: DebuggerOptions,
-): WatchHandle {
-  return doWatch(
-    effect,
-    null,
-    __DEV__
-      ? extend({}, options as any, { flush: 'layout' })
-      : { flush: 'layout' },
   )
 }
 
@@ -223,35 +192,20 @@ function doWatch(
 
   // scheduler
   let isPre = false
-  switch (flush) {
-    case 'post':
-    case 'layout':
-    case 'insertion':
-      baseWatchOptions.scheduler = job => {
-        const jobs = queuePostFlushCb(job)
-        const instance = job.i
-        if (instance) {
-          for (let i = jobs.offset; i < jobs.offset + jobs.length; i++) {
-            instance.queueEffect!(flush, i)
-          }
-        }
+  if (flush === 'post') {
+    baseWatchOptions.scheduler = job => {
+      queuePostRenderEffect(job, instance && instance.suspense)
+    }
+  } else if (flush !== 'sync') {
+    // default: 'pre'
+    isPre = true
+    baseWatchOptions.scheduler = (job, isFirstRun) => {
+      if (isFirstRun) {
+        job()
+      } else {
+        queueJob(job)
       }
-      break
-    case 'sync':
-      break
-    default:
-      // default: 'pre'
-      isPre = true
-      baseWatchOptions.scheduler = (job, isFirstRun) => {
-        if (isFirstRun) {
-          job()
-        } else {
-          const instance = job.i
-          const jobIndex = queueJob(job)
-          if (instance) instance.queueEffect!('pre', jobIndex)
-        }
-      }
-      break
+    }
   }
 
   baseWatchOptions.augmentJob = (job: SchedulerJob) => {
