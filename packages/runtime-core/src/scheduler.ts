@@ -145,13 +145,12 @@ export function switchToAuto(): void {
         }
       }
 
-      flushIndex = 0
+      flushIndex = -1
       queue.length = 0
 
       flushPostFlushCbs(seen)
 
       endFlush()
-      isFlushing = false
       currentFlushPromise = null
       // some postFlushCb queued jobs!
       // keep flushing until it drains.
@@ -161,9 +160,8 @@ export function switchToAuto(): void {
       auto = true
     }
   } else {
-    flushIndex = 0
+    flushIndex = -1
     endFlush()
-    isFlushing = false
     currentFlushPromise = null
     activePostFlushCbs = null
     postFlushIndex = 0
@@ -173,7 +171,6 @@ export function switchToAuto(): void {
 
 export function switchToManual(): void {
   controllers++
-  queueFlush()
   auto = false
 }
 
@@ -393,7 +390,7 @@ function flushJobs(seen?: CountMap) {
     : NOOP
 
   try {
-    for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
+    for (flushIndex = -1; flushIndex < queue.length; flushIndex++) {
       const job = queue[flushIndex]
       if (job && !(job.flags! & SchedulerJobFlags.DISPOSED)) {
         if (__DEV__ && check(job)) {
