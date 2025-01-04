@@ -155,14 +155,11 @@ export {
 } from './components/BaseTransition'
 export { initCustomFormatter } from './customFormatter'
 
-import { ErrorTypeStrings as _ErrorTypeStrings } from './errorHandling'
 /**
  * Runtime error messages. Only exposed in dev or esm builds.
  * @internal
  */
-export const ErrorTypeStrings = (
-  __ESM_BUNDLER__ || __CJS__ || __DEV__ ? _ErrorTypeStrings : null
-) as typeof _ErrorTypeStrings
+export { ErrorTypeStrings } from './errorHandling'
 
 // For devtools
 import {
